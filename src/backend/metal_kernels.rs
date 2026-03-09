@@ -17,28 +17,26 @@
 //!
 //! ```no_run
 //! use metal_candle::backend::metal_kernels::MetalKernelCompiler;
-//! # use std::sync::Arc;
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let device = metal::Device::system_default()
+//! let device = candle_metal_kernels::metal::Device::system_default()
 //!     .ok_or("Metal not available")?;
-//! let device = Arc::new(device);
 //!
-//! let compiler = MetalKernelCompiler::new(device)?;
+//! let compiler = MetalKernelCompiler::new(&device)?;
 //! let pipeline = compiler.create_pipeline("fused_lora_forward")?;
 //! # Ok(())
 //! # }
 //! ```
 
 use crate::error::DeviceError;
-use std::sync::Arc;
+use candle_metal_kernels::metal::{ComputePipeline, Device, Library};
 
 /// Metal kernel compiler for custom shaders.
 ///
 /// Compiles and caches Metal compute pipelines for custom kernels.
 pub struct MetalKernelCompiler {
-    device: Arc<metal::Device>,
-    library: metal::Library,
+    device: Device,
+    library: Library,
 }
 
 impl MetalKernelCompiler {
@@ -51,33 +49,20 @@ impl MetalKernelCompiler {
     /// # Errors
     ///
     /// Returns [`DeviceError::InitializationFailed`] if the Metal library cannot be compiled.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use metal_candle::backend::metal_kernels::MetalKernelCompiler;
-    /// # use std::sync::Arc;
-    ///
-    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let device = metal::Device::system_default()
-    ///     .ok_or("Metal not available")?;
-    /// let device = Arc::new(device);
-    ///
-    /// let compiler = MetalKernelCompiler::new(device)?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn new(device: Arc<metal::Device>) -> Result<Self, DeviceError> {
+    pub fn new(device: &Device) -> Result<Self, DeviceError> {
         // Compile the Metal shader library from source
         let source = include_str!("kernels.metal");
 
         let library = device
-            .new_library_with_source(source, &metal::CompileOptions::new())
+            .new_library_with_source(source, None)
             .map_err(|e| DeviceError::InitializationFailed {
                 reason: format!("Failed to compile Metal library: {e}"),
             })?;
 
-        Ok(Self { device, library })
+        Ok(Self {
+            device: device.clone(),
+            library,
+        })
     }
 
     /// Create a compute pipeline for a specific kernel function.
@@ -91,24 +76,10 @@ impl MetalKernelCompiler {
     /// Returns [`DeviceError::OperationFailed`] if:
     /// - The kernel function is not found in the library
     /// - The compute pipeline cannot be created
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use metal_candle::backend::metal_kernels::MetalKernelCompiler;
-    /// # use std::sync::Arc;
-    ///
-    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let device = Arc::new(metal::Device::system_default().unwrap());
-    /// let compiler = MetalKernelCompiler::new(device)?;
-    /// let pipeline = compiler.create_pipeline("fused_lora_forward")?;
-    /// # Ok(())
-    /// # }
-    /// ```
     pub fn create_pipeline(
         &self,
         kernel_name: &str,
-    ) -> Result<metal::ComputePipelineState, DeviceError> {
+    ) -> Result<ComputePipeline, DeviceError> {
         let function = self.library.get_function(kernel_name, None).map_err(|e| {
             DeviceError::OperationFailed {
                 operation: format!("Failed to get kernel function '{kernel_name}': {e}"),
@@ -120,18 +91,6 @@ impl MetalKernelCompiler {
             .map_err(|e| DeviceError::OperationFailed {
                 operation: format!("Failed to create compute pipeline for '{kernel_name}': {e}"),
             })
-    }
-
-    /// Get reference to the Metal device.
-    #[must_use]
-    pub fn device(&self) -> &Arc<metal::Device> {
-        &self.device
-    }
-
-    /// Get reference to the compiled library.
-    #[must_use]
-    pub fn library(&self) -> &metal::Library {
-        &self.library
     }
 }
 
@@ -199,26 +158,23 @@ mod tests {
 
     #[test]
     fn test_compiler_creation() {
-        if let Some(device) = metal::Device::system_default() {
-            let device = Arc::new(device);
-            let compiler = MetalKernelCompiler::new(device);
-
-            // Should compile successfully
+        if let Some(device) = Device::system_default() {
+            let compiler = MetalKernelCompiler::new(&device);
             assert!(compiler.is_ok());
         }
     }
 
     #[test]
     fn test_pipeline_creation() {
-        if let Some(device) = metal::Device::system_default() {
-            let device = Arc::new(device);
-            let compiler = MetalKernelCompiler::new(device).expect("Failed to create compiler");
+        if let Some(device) = Device::system_default() {
+            let compiler = MetalKernelCompiler::new(&device).expect("Failed to create compiler");
 
-            // Test with a kernel that exists
-            // (will add actual kernels in Phase 3)
-            // For now, just verify the compiler works
-            let _function_names = compiler.library().function_names();
-            // Library compiled successfully if we got here
+            // Verify we can compile all custom kernels
+            assert!(compiler.create_pipeline("fused_lora_forward").is_ok());
+            assert!(compiler.create_pipeline("fused_lora_forward_tiled").is_ok());
+            assert!(compiler.create_pipeline("fused_softmax").is_ok());
+            assert!(compiler.create_pipeline("fused_rms_norm").is_ok());
+            assert!(compiler.create_pipeline("layer_norm").is_ok());
         }
     }
 }

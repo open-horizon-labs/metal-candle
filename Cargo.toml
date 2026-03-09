@@ -63,11 +63,9 @@ async-stream = { version = "0.3", optional = true }
 dashmap = { version = "5.5", optional = true }
 
 # Custom Metal kernels (for performance optimization)
-# Must match candle-core's metal version (0.27)
 # These are only used on macOS via the custom-metal feature
 candle-metal-kernels = { version = "0.9", optional = true }
-metal = { version = "0.27", optional = true }
-objc = { version = "0.2", optional = true }
+objc2-metal = { version = "0.3", optional = true }
 
 [dev-dependencies]
 # Benchmarking
@@ -86,7 +84,7 @@ anyhow = "1.0"
 default = ["custom-metal", "graph"]
 # custom-metal enables Metal GPU acceleration (macOS only)
 # This also enables the metal feature on candle-core
-custom-metal = ["dep:metal", "dep:objc", "dep:candle-metal-kernels", "candle-core/metal"]
+custom-metal = ["dep:objc2-metal", "dep:candle-metal-kernels", "candle-core/metal"]
 embeddings = []
 graph = []  # Lazy evaluation framework (v2.0+)
 async-exec = ["graph", "dep:tokio", "dep:async-trait", "dep:dashmap"]  # Async execution (Phase 5)
