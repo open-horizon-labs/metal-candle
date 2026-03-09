@@ -40,8 +40,8 @@ use candle_nn::VarBuilder;
 /// # }
 /// ```ignore
 pub struct BertEncoder {
-    model: BertModel,
-    normalize: bool,
+    pub(crate) model: BertModel,
+    pub normalize: bool,
 }
 
 impl BertEncoder {

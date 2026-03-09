@@ -18,6 +18,7 @@
 )]
 
 use crate::embeddings::metal_bert::{metal_layer_norm, MetalLayerNorm};
+use crate::models::transformer::Projection;
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use candle_transformers::models::with_tracing::{linear, Linear};
@@ -212,11 +213,10 @@ impl BertEmbeddings {
     }
 }
 
-#[derive(Clone)]
 struct BertSelfAttention {
-    query: Linear,
-    key: Linear,
-    value: Linear,
+    query: Projection<Linear>,
+    key: Projection<Linear>,
+    value: Projection<Linear>,
     dropout: Dropout,
     num_attention_heads: usize,
     attention_head_size: usize,
@@ -230,9 +230,9 @@ impl BertSelfAttention {
         let all_head_size = config.num_attention_heads * attention_head_size;
         let dropout = Dropout::new(config.hidden_dropout_prob);
         let hidden_size = config.hidden_size;
-        let query = linear(hidden_size, all_head_size, vb.pp("query"))?;
-        let value = linear(hidden_size, all_head_size, vb.pp("value"))?;
-        let key = linear(hidden_size, all_head_size, vb.pp("key"))?;
+        let query = Projection::new(linear(hidden_size, all_head_size, vb.pp("query"))?);
+        let value = Projection::new(linear(hidden_size, all_head_size, vb.pp("value"))?);
+        let key = Projection::new(linear(hidden_size, all_head_size, vb.pp("key"))?);
         Ok(Self {
             query,
             key,
@@ -256,9 +256,9 @@ impl BertSelfAttention {
 
     fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let query_layer = self.query.forward(hidden_states)?;
-        let key_layer = self.key.forward(hidden_states)?;
-        let value_layer = self.value.forward(hidden_states)?;
+        let query_layer = self.query.forward(hidden_states).map_err(candle_core::Error::msg)?;
+        let key_layer = self.key.forward(hidden_states).map_err(candle_core::Error::msg)?;
+        let value_layer = self.value.forward(hidden_states).map_err(candle_core::Error::msg)?;
 
         let query_layer = self.transpose_for_scores(&query_layer)?;
         let key_layer = self.transpose_for_scores(&key_layer)?;
@@ -280,9 +280,8 @@ impl BertSelfAttention {
     }
 }
 
-#[derive(Clone)]
 struct BertSelfOutput {
-    dense: Linear,
+    dense: Projection<Linear>,
     layer_norm: MetalLayerNorm,
     dropout: Dropout,
     span: tracing::Span,
@@ -290,7 +289,7 @@ struct BertSelfOutput {
 
 impl BertSelfOutput {
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
-        let dense = linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?;
+        let dense = Projection::new(linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?);
         let layer_norm = metal_layer_norm(
             config.hidden_size,
             config.layer_norm_eps,
@@ -307,14 +306,13 @@ impl BertSelfOutput {
 
     fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let hidden_states = self.dense.forward(hidden_states)?;
+        let hidden_states = self.dense.forward(hidden_states).map_err(candle_core::Error::msg)?;
         let hidden_states = self.dropout.forward(&hidden_states)?;
         self.layer_norm.forward(&(hidden_states + input_tensor)?)
     }
 }
 
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L392
-#[derive(Clone)]
 struct BertAttention {
     self_attention: BertSelfAttention,
     self_output: BertSelfOutput,
@@ -341,16 +339,15 @@ impl BertAttention {
 }
 
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L441
-#[derive(Clone)]
 struct BertIntermediate {
-    dense: Linear,
+    dense: Projection<Linear>,
     intermediate_act: HiddenActLayer,
     span: tracing::Span,
 }
 
 impl BertIntermediate {
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
-        let dense = linear(config.hidden_size, config.intermediate_size, vb.pp("dense"))?;
+        let dense = Projection::new(linear(config.hidden_size, config.intermediate_size, vb.pp("dense"))?);
         Ok(Self {
             dense,
             intermediate_act: HiddenActLayer::new(config.hidden_act),
@@ -359,19 +356,18 @@ impl BertIntermediate {
     }
 }
 
-impl Module for BertIntermediate {
+impl BertIntermediate {
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let hidden_states = self.dense.forward(hidden_states)?;
+        let hidden_states = self.dense.forward(hidden_states).map_err(candle_core::Error::msg)?;
         let ys = self.intermediate_act.forward(&hidden_states)?;
         Ok(ys)
     }
 }
 
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L456
-#[derive(Clone)]
 struct BertOutput {
-    dense: Linear,
+    dense: Projection<Linear>,
     layer_norm: MetalLayerNorm,
     dropout: Dropout,
     span: tracing::Span,
@@ -379,7 +375,7 @@ struct BertOutput {
 
 impl BertOutput {
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
-        let dense = linear(config.intermediate_size, config.hidden_size, vb.pp("dense"))?;
+        let dense = Projection::new(linear(config.intermediate_size, config.hidden_size, vb.pp("dense"))?);
         let layer_norm = metal_layer_norm(
             config.hidden_size,
             config.layer_norm_eps,
@@ -396,14 +392,13 @@ impl BertOutput {
 
     fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let hidden_states = self.dense.forward(hidden_states)?;
+        let hidden_states = self.dense.forward(hidden_states).map_err(candle_core::Error::msg)?;
         let hidden_states = self.dropout.forward(&hidden_states)?;
         self.layer_norm.forward(&(hidden_states + input_tensor)?)
     }
 }
 
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L470
-#[derive(Clone)]
 pub struct BertLayer {
     attention: BertAttention,
     intermediate: BertIntermediate,
@@ -412,6 +407,41 @@ pub struct BertLayer {
 }
 
 impl BertLayer {
+    /// Collect all LoRA trainable Var references from this layer's projections.
+    pub fn lora_vars(&self) -> Vec<&candle_core::Var> {
+        let mut vars = Vec::new();
+        // Attention: Q, K, V
+        for proj in [&self.attention.self_attention.query,
+                     &self.attention.self_attention.key,
+                     &self.attention.self_attention.value] {
+            if let Some(lora) = proj.lora() {
+                vars.extend(lora.trainable_variables());
+            }
+        }
+        // Attention output dense
+        if let Some(lora) = self.attention.self_output.dense.lora() {
+            vars.extend(lora.trainable_variables());
+        }
+        // Intermediate dense
+        if let Some(lora) = self.intermediate.dense.lora() {
+            vars.extend(lora.trainable_variables());
+        }
+        // Output dense
+        if let Some(lora) = self.output.dense.lora() {
+            vars.extend(lora.trainable_variables());
+        }
+        vars
+    }
+
+    /// Set LoRA on specific projections within this layer.
+    pub fn set_lora_on_attention(&mut self, query: Option<crate::training::LoRALayer>,
+                                  key: Option<crate::training::LoRALayer>,
+                                  value: Option<crate::training::LoRALayer>) {
+        self.attention.self_attention.query.set_lora(query);
+        self.attention.self_attention.key.set_lora(key);
+        self.attention.self_attention.value.set_lora(value);
+    }
+
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let attention = BertAttention::load(vb.pp("attention"), config)?;
         let intermediate = BertIntermediate::load(vb.pp("intermediate"), config)?;
@@ -439,13 +469,17 @@ impl BertLayer {
 }
 
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L556
-#[derive(Clone)]
 pub struct BertEncoder {
     pub layers: Vec<BertLayer>,
     span: tracing::Span,
 }
 
 impl BertEncoder {
+    /// Collect all LoRA trainable Var references across all layers.
+    pub fn lora_vars(&self) -> Vec<&candle_core::Var> {
+        self.layers.iter().flat_map(|l| l.lora_vars()).collect()
+    }
+
     pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let layers = (0..config.num_hidden_layers)
             .map(|index| BertLayer::load(vb.pp(format!("layer.{index}")), config))
@@ -454,10 +488,34 @@ impl BertEncoder {
         Ok(BertEncoder { layers, span })
     }
 
+    /// Apply LoRA to Q/K/V projections in all layers.
+    pub fn apply_lora(&mut self, config: &crate::training::LoRAConfig, device: &Device) -> Result<()> {
+        let hidden_size = self.layers.first()
+            .map(|l| l.attention.self_attention.attention_head_size * l.attention.self_attention.num_attention_heads)
+            .unwrap_or(0);
+
+        for layer in &mut self.layers {
+            let q_lora = crate::training::LoRALayer::new(hidden_size, hidden_size, config, device)
+                .map_err(|e| candle_core::Error::Msg(format!("{e}")))?;
+            let k_lora = crate::training::LoRALayer::new(hidden_size, hidden_size, config, device)
+                .map_err(|e| candle_core::Error::Msg(format!("{e}")))?;
+            let v_lora = crate::training::LoRALayer::new(hidden_size, hidden_size, config, device)
+                .map_err(|e| candle_core::Error::Msg(format!("{e}")))?;
+            layer.set_lora_on_attention(Some(q_lora), Some(k_lora), Some(v_lora));
+        }
+        Ok(())
+    }
+
+    /// Remove LoRA from all layers.
+    pub fn remove_lora(&mut self) {
+        for layer in &mut self.layers {
+            layer.set_lora_on_attention(None, None, None);
+        }
+    }
+
     pub fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let mut hidden_states = hidden_states.clone();
-        // Use a loop rather than a fold as it's easier to modify when adding debug/...
         for layer in self.layers.iter() {
             hidden_states = layer.forward(&hidden_states, attention_mask)?
         }
@@ -468,7 +526,7 @@ impl BertEncoder {
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L874
 pub struct BertModel {
     embeddings: BertEmbeddings,
-    encoder: BertEncoder,
+    pub encoder: BertEncoder,
     pub device: Device,
     span: tracing::Span,
 }

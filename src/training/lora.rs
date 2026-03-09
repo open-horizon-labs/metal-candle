@@ -256,6 +256,44 @@ impl LoRALayer {
         })
     }
 
+    /// Creates a `LoRA` layer from existing A and B tensors (copies — no gradient sharing).
+    pub fn from_tensors(lora_a: &Tensor, lora_b: &Tensor, config: &LoRAConfig) -> Result<Self> {
+        let a_dims = lora_a.dims();
+        let b_dims = lora_b.dims();
+        let in_features = a_dims[0];
+        let out_features = b_dims[1];
+
+        let lora_a = Var::from_tensor(&lora_a.clone())?;
+        let lora_b = Var::from_tensor(&lora_b.clone())?;
+
+        Ok(Self {
+            lora_a,
+            lora_b,
+            config: *config,
+            in_features,
+            out_features,
+            training: true,
+        })
+    }
+
+    /// Creates a `LoRA` layer sharing the same `Var` instances (gradient-connected).
+    ///
+    /// Use this when the Projection's forward pass must produce gradients that
+    /// flow back to the adapter's trainable parameters.
+    #[must_use]
+    pub fn from_vars(lora_a: &Var, lora_b: &Var, config: &LoRAConfig) -> Self {
+        let in_features = lora_a.dims()[0];
+        let out_features = lora_b.dims()[1];
+        Self {
+            lora_a: lora_a.clone(),
+            lora_b: lora_b.clone(),
+            config: *config,
+            in_features,
+            out_features,
+            training: true,
+        }
+    }
+
     /// Performs forward pass through the `LoRA` layer.
     ///
     /// Computes: `scale * (input @ A^T @ B^T)`
