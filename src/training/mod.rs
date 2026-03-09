@@ -49,7 +49,7 @@ pub use adapter::{LoRAAdapter, LoRAAdapterConfig, TargetModule};
 pub use adapter_registry::AdapterRegistry;
 pub use apply_adapter::ApplyAdapter;
 pub use lora::{LoRAConfig, LoRALayer};
-pub use loss::{cross_entropy_loss, cross_entropy_loss_with_smoothing};
+pub use loss::{contrastive_loss, cross_entropy_loss, cross_entropy_loss_with_smoothing};
 pub use optimizer::{AdamW, AdamWConfig};
 pub use scheduler::LRScheduler;
 pub use trainer::{StepMetrics, Trainer, TrainingConfig, TrainingStep};

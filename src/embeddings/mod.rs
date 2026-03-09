@@ -404,6 +404,27 @@ impl EmbeddingModel {
     pub const fn model_type(&self) -> EmbeddingModelType {
         self.config.model_type
     }
+
+    /// Apply LoRA to the BERT encoder's Q/K/V attention projections.
+    ///
+    /// Enables fine-tuning of embedding models for domain-specific retrieval.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if LoRA layer creation fails.
+    pub fn apply_lora(&mut self, config: &crate::training::LoRAConfig) -> CandleResult<()> {
+        self.encoder.model.encoder.apply_lora(config, &self.device)
+    }
+
+    /// Remove LoRA from the embedding model.
+    pub fn remove_lora(&mut self) {
+        self.encoder.model.encoder.remove_lora();
+    }
+
+    /// Collect all LoRA trainable Var references for gradient-based training.
+    pub fn lora_vars(&self) -> Vec<&candle_core::Var> {
+        self.encoder.model.encoder.lora_vars()
+    }
 }
 
 #[cfg(test)]

@@ -407,6 +407,41 @@ pub struct BertLayer {
 }
 
 impl BertLayer {
+    /// Collect all LoRA trainable Var references from this layer's projections.
+    pub fn lora_vars(&self) -> Vec<&candle_core::Var> {
+        let mut vars = Vec::new();
+        // Attention: Q, K, V
+        for proj in [&self.attention.self_attention.query,
+                     &self.attention.self_attention.key,
+                     &self.attention.self_attention.value] {
+            if let Some(lora) = proj.lora() {
+                vars.extend(lora.trainable_variables());
+            }
+        }
+        // Attention output dense
+        if let Some(lora) = self.attention.self_output.dense.lora() {
+            vars.extend(lora.trainable_variables());
+        }
+        // Intermediate dense
+        if let Some(lora) = self.intermediate.dense.lora() {
+            vars.extend(lora.trainable_variables());
+        }
+        // Output dense
+        if let Some(lora) = self.output.dense.lora() {
+            vars.extend(lora.trainable_variables());
+        }
+        vars
+    }
+
+    /// Set LoRA on specific projections within this layer.
+    pub fn set_lora_on_attention(&mut self, query: Option<crate::training::LoRALayer>,
+                                  key: Option<crate::training::LoRALayer>,
+                                  value: Option<crate::training::LoRALayer>) {
+        self.attention.self_attention.query.set_lora(query);
+        self.attention.self_attention.key.set_lora(key);
+        self.attention.self_attention.value.set_lora(value);
+    }
+
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let attention = BertAttention::load(vb.pp("attention"), config)?;
         let intermediate = BertIntermediate::load(vb.pp("intermediate"), config)?;
@@ -440,6 +475,11 @@ pub struct BertEncoder {
 }
 
 impl BertEncoder {
+    /// Collect all LoRA trainable Var references across all layers.
+    pub fn lora_vars(&self) -> Vec<&candle_core::Var> {
+        self.layers.iter().flat_map(|l| l.lora_vars()).collect()
+    }
+
     pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let layers = (0..config.num_hidden_layers)
             .map(|index| BertLayer::load(vb.pp(format!("layer.{index}")), config))
@@ -448,10 +488,34 @@ impl BertEncoder {
         Ok(BertEncoder { layers, span })
     }
 
+    /// Apply LoRA to Q/K/V projections in all layers.
+    pub fn apply_lora(&mut self, config: &crate::training::LoRAConfig, device: &Device) -> Result<()> {
+        let hidden_size = self.layers.first()
+            .map(|l| l.attention.self_attention.attention_head_size * l.attention.self_attention.num_attention_heads)
+            .unwrap_or(0);
+
+        for layer in &mut self.layers {
+            let q_lora = crate::training::LoRALayer::new(hidden_size, hidden_size, config, device)
+                .map_err(|e| candle_core::Error::Msg(format!("{e}")))?;
+            let k_lora = crate::training::LoRALayer::new(hidden_size, hidden_size, config, device)
+                .map_err(|e| candle_core::Error::Msg(format!("{e}")))?;
+            let v_lora = crate::training::LoRALayer::new(hidden_size, hidden_size, config, device)
+                .map_err(|e| candle_core::Error::Msg(format!("{e}")))?;
+            layer.set_lora_on_attention(Some(q_lora), Some(k_lora), Some(v_lora));
+        }
+        Ok(())
+    }
+
+    /// Remove LoRA from all layers.
+    pub fn remove_lora(&mut self) {
+        for layer in &mut self.layers {
+            layer.set_lora_on_attention(None, None, None);
+        }
+    }
+
     pub fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let mut hidden_states = hidden_states.clone();
-        // Use a loop rather than a fold as it's easier to modify when adding debug/...
         for layer in self.layers.iter() {
             hidden_states = layer.forward(&hidden_states, attention_mask)?
         }
@@ -462,7 +526,7 @@ impl BertEncoder {
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L874
 pub struct BertModel {
     embeddings: BertEmbeddings,
-    encoder: BertEncoder,
+    pub encoder: BertEncoder,
     pub device: Device,
     span: tracing::Span,
 }
