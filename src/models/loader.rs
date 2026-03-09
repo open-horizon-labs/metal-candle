@@ -43,10 +43,14 @@ impl ModelLoader {
     /// ```
     #[must_use]
     pub fn new(device: Device) -> Self {
-        Self {
-            device,
-            dtype: None,
-        }
+        // Default to F16 on Metal for ~2x memory savings and faster matmuls.
+        // Metal has native F16 support; CPU stays at file dtype (typically F32).
+        let dtype = if device.as_ref().is_metal() {
+            Some(DType::F16)
+        } else {
+            None
+        };
+        Self { device, dtype }
     }
 
     /// Sets the target dtype for loaded tensors.

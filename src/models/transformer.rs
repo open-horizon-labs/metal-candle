@@ -62,10 +62,14 @@ impl<L: Module> Projection<L> {
     }
 
     /// Performs forward pass: `linear(x) + lora(x)` if LoRA is set.
+    ///
+    /// LoRA weights are kept in F32 for training stability. When the base model
+    /// runs in F16, the LoRA delta is cast to match the output dtype.
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let out = self.linear.forward(x)?;
         if let Some(lora) = &self.lora {
             let delta = lora.forward(x)?;
+            let delta = delta.to_dtype(out.dtype())?;
             Ok((&out + &delta)?)
         } else {
             Ok(out)

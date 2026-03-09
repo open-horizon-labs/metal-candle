@@ -350,9 +350,14 @@ impl LoRALayer {
         // lora_a: (in_features, rank) - stored transposed!
         // lora_b: (rank, out_features) - stored transposed and scaled!
 
+        // Upcast input to F32 if needed (LoRA weights are always F32 for stability)
+        let input = if input.dtype() != DType::F32 {
+            &input.to_dtype(DType::F32)?
+        } else {
+            input
+        };
+
         // Step 1: input @ A -> (..., rank)
-        // Candle's broadcast_matmul handles batched dimensions automatically
-        // (..., in_features) @ (in_features, rank) -> (..., rank)
         let hidden = input.broadcast_matmul(self.lora_a.as_tensor())?;
 
         // Step 1.5: Apply dropout if in training mode and configured
