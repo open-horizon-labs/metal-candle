@@ -181,6 +181,11 @@ impl LoRAAdapter {
     /// # Errors
     ///
     /// Returns an error if `LoRA` layer creation fails.
+    /// Creates a new `LoRA` adapter.
+    ///
+    /// For models with grouped-query attention, pass `num_kv_heads` and `head_dim`
+    /// so K/V projections get the correct dimensions. If `None`, all attention
+    /// projections use `hidden_size` (multi-head attention without GQA).
     pub fn new(
         hidden_size: usize,
         intermediate_size: usize,
@@ -188,17 +193,33 @@ impl LoRAAdapter {
         config: &LoRAAdapterConfig,
         device: &Device,
     ) -> Result<Self> {
+        Self::new_with_gqa(hidden_size, intermediate_size, num_layers, None, None, config, device)
+    }
+
+    /// Creates a new `LoRA` adapter with explicit GQA dimensions.
+    pub fn new_with_gqa(
+        hidden_size: usize,
+        intermediate_size: usize,
+        num_layers: usize,
+        num_kv_heads: Option<usize>,
+        head_dim: Option<usize>,
+        config: &LoRAAdapterConfig,
+        device: &Device,
+    ) -> Result<Self> {
         let lora_config = config.to_lora_config();
         let mut layers = HashMap::new();
+
+        let kv_dim = match (num_kv_heads, head_dim) {
+            (Some(kv), Some(hd)) => kv * hd,
+            _ => hidden_size,
+        };
 
         // Create LoRA layers for each target module in each transformer layer
         for layer_idx in 0..num_layers {
             for target in &config.target_modules {
                 let (in_features, out_features) = match target {
-                    TargetModule::QProj
-                    | TargetModule::KProj
-                    | TargetModule::VProj
-                    | TargetModule::OProj => (hidden_size, hidden_size),
+                    TargetModule::QProj | TargetModule::OProj => (hidden_size, hidden_size),
+                    TargetModule::KProj | TargetModule::VProj => (hidden_size, kv_dim),
                     TargetModule::GateProj | TargetModule::UpProj => {
                         (hidden_size, intermediate_size)
                     }
