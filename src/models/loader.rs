@@ -247,20 +247,42 @@ impl ModelLoader {
             .into());
         }
 
-        // Read safetensors metadata without loading tensors
-        // We read the file into memory since we only need the header (small)
-        let buffer = std::fs::read(path)?;
+        // Read only the safetensors header, not the full file.
+        // The first 8 bytes encode the header length as little-endian u64.
+        let mut file = std::fs::File::open(path)?;
+        use std::io::Read as _;
+        let mut len_buf = [0u8; 8];
+        file.read_exact(&mut len_buf)?;
+        let header_len = u64::from_le_bytes(len_buf) as usize;
 
-        let tensors = safetensors::SafeTensors::deserialize(&buffer).map_err(|e| {
-            ModelError::InvalidFormat {
-                reason: format!("Failed to parse safetensors metadata: {e}"),
-            }
-        })?;
+        let mut header_buf = vec![0u8; 8 + header_len];
+        header_buf[..8].copy_from_slice(&len_buf);
+        file.read_exact(&mut header_buf[8..])?;
 
-        let info = tensors
-            .tensors()
+        // Pad with enough zeros so SafeTensors can validate offsets.
+        // SafeTensors::deserialize expects the full buffer but only reads header metadata.
+        // We use the metadata-only API from safetensors instead.
+        let header_json: serde_json::Value =
+            serde_json::from_slice(&header_buf[8..]).map_err(|e| ModelError::InvalidFormat {
+                reason: format!("Failed to parse safetensors header: {e}"),
+            })?;
+
+        let info = header_json
+            .as_object()
+            .ok_or_else(|| ModelError::InvalidFormat {
+                reason: "Safetensors header is not a JSON object".to_string(),
+            })?
             .iter()
-            .map(|(name, view)| (name.clone(), view.shape().to_vec()))
+            .filter(|(key, _)| *key != "__metadata__")
+            .filter_map(|(name, value)| {
+                let shape = value
+                    .get("shape")?
+                    .as_array()?
+                    .iter()
+                    .filter_map(|v| v.as_u64().map(|n| n as usize))
+                    .collect::<Vec<_>>();
+                Some((name.clone(), shape))
+            })
             .collect();
 
         Ok(info)

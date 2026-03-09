@@ -5,9 +5,73 @@
 
 use crate::backend::TensorExt;
 use crate::error::Result;
+use crate::training::LoRALayer;
 use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::{linear, linear_no_bias, ops, Linear, Module, VarBuilder};
 use std::sync::Arc;
+
+/// A linear projection that optionally wraps a LoRA delta.
+///
+/// When a LoRA adapter is applied, the forward pass computes:
+/// `output = linear(x) + lora(x)`
+///
+/// This encapsulates the LoRA concern so that `Attention` and `MLP`
+/// don't need to know about adapters.
+///
+/// Generic over the inner linear type `L`. Defaults to `candle_nn::Linear`
+/// for Qwen/transformer components. BERT embeddings can use
+/// `Projection<with_tracing::Linear>`.
+#[derive(Debug)]
+pub struct Projection<L: Module = Linear> {
+    linear: L,
+    lora: Option<LoRALayer>,
+}
+
+impl<L: Module> Projection<L> {
+    /// Creates a new projection wrapping a linear layer.
+    pub fn new(linear: L) -> Self {
+        Self { linear, lora: None }
+    }
+
+    /// Sets the LoRA layer for this projection.
+    pub fn set_lora(&mut self, lora: Option<LoRALayer>) {
+        self.lora = lora;
+    }
+
+    /// Returns whether this projection has an active LoRA layer.
+    #[must_use]
+    pub fn has_lora(&self) -> bool {
+        self.lora.is_some()
+    }
+
+    /// Returns a reference to the LoRA layer, if any.
+    #[must_use]
+    pub fn lora(&self) -> Option<&LoRALayer> {
+        self.lora.as_ref()
+    }
+
+    /// Returns a mutable reference to the LoRA layer, if any.
+    pub fn lora_mut(&mut self) -> Option<&mut LoRALayer> {
+        self.lora.as_mut()
+    }
+
+    /// Returns a reference to the underlying linear layer.
+    #[must_use]
+    pub fn linear(&self) -> &L {
+        &self.linear
+    }
+
+    /// Performs forward pass: `linear(x) + lora(x)` if LoRA is set.
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let out = self.linear.forward(x)?;
+        if let Some(lora) = &self.lora {
+            let delta = lora.forward(x)?;
+            Ok((&out + &delta)?)
+        } else {
+            Ok(out)
+        }
+    }
+}
 
 /// Rotary Position Embeddings (`RoPE`) for attention mechanisms.
 ///
@@ -149,10 +213,10 @@ impl RotaryEmbedding {
 /// ```
 #[derive(Debug)]
 pub struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: Projection,
+    k_proj: Projection,
+    v_proj: Projection,
+    o_proj: Projection,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -186,10 +250,10 @@ impl Attention {
         let num_kv_heads = num_kv_heads.unwrap_or(num_heads);
         let head_dim = hidden_size / num_heads;
 
-        let q_proj = linear(hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = linear(hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = linear(hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
-        let o_proj = linear_no_bias(num_heads * head_dim, hidden_size, vb.pp("o_proj"))?;
+        let q_proj = Projection::new(linear(hidden_size, num_heads * head_dim, vb.pp("q_proj"))?);
+        let k_proj = Projection::new(linear(hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?);
+        let v_proj = Projection::new(linear(hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?);
+        let o_proj = Projection::new(linear_no_bias(num_heads * head_dim, hidden_size, vb.pp("o_proj"))?);
 
         let rope = Arc::new(RotaryEmbedding::new(
             head_dim,
@@ -237,7 +301,7 @@ impl Attention {
     ) -> Result<Tensor> {
         let (batch_size, seq_len, _) = hidden_states.dims3()?;
 
-        // Project to Q, K, V
+        // Project to Q, K, V (with optional LoRA deltas)
         let q = self.q_proj.forward(hidden_states)?;
         let k = self.k_proj.forward(hidden_states)?;
         let v = self.v_proj.forward(hidden_states)?;
@@ -281,8 +345,52 @@ impl Attention {
         let out = out.transpose(1, 2)?;
         let out = out.reshape((batch_size, seq_len, self.num_heads * self.head_dim))?;
 
-        // Output projection
-        self.o_proj.forward(&out).map_err(Into::into)
+        // Output projection (with optional LoRA delta)
+        self.o_proj.forward(&out)
+    }
+
+    /// Returns a reference to the Q projection.
+    #[must_use]
+    pub fn q_proj(&self) -> &Projection {
+        &self.q_proj
+    }
+
+    /// Returns a reference to the K projection.
+    #[must_use]
+    pub fn k_proj(&self) -> &Projection {
+        &self.k_proj
+    }
+
+    /// Returns a reference to the V projection.
+    #[must_use]
+    pub fn v_proj(&self) -> &Projection {
+        &self.v_proj
+    }
+
+    /// Returns a reference to the O projection.
+    #[must_use]
+    pub fn o_proj(&self) -> &Projection {
+        &self.o_proj
+    }
+
+    /// Returns a mutable reference to the Q projection.
+    pub fn q_proj_mut(&mut self) -> &mut Projection {
+        &mut self.q_proj
+    }
+
+    /// Returns a mutable reference to the K projection.
+    pub fn k_proj_mut(&mut self) -> &mut Projection {
+        &mut self.k_proj
+    }
+
+    /// Returns a mutable reference to the V projection.
+    pub fn v_proj_mut(&mut self) -> &mut Projection {
+        &mut self.v_proj
+    }
+
+    /// Returns a mutable reference to the O projection.
+    pub fn o_proj_mut(&mut self) -> &mut Projection {
+        &mut self.o_proj
     }
 
     /// Repeats key/value tensors for grouped-query attention.
@@ -342,9 +450,9 @@ impl Attention {
 /// ```
 #[derive(Debug)]
 pub struct MLP {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+    gate_proj: Projection,
+    up_proj: Projection,
+    down_proj: Projection,
 }
 
 impl MLP {
@@ -362,9 +470,9 @@ impl MLP {
     ///
     /// Returns an error if layer initialization fails.
     pub fn new(hidden_size: usize, intermediate_size: usize, vb: &VarBuilder) -> Result<Self> {
-        let gate_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?;
-        let up_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?;
-        let down_proj = linear_no_bias(intermediate_size, hidden_size, vb.pp("down_proj"))?;
+        let gate_proj = Projection::new(linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?);
+        let up_proj = Projection::new(linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?);
+        let down_proj = Projection::new(linear_no_bias(intermediate_size, hidden_size, vb.pp("down_proj"))?);
 
         Ok(Self {
             gate_proj,
@@ -391,7 +499,40 @@ impl MLP {
         let gate = ops::silu(&self.gate_proj.forward(x)?)?;
         let up = self.up_proj.forward(x)?;
         let hidden = (gate * up)?;
-        self.down_proj.forward(&hidden).map_err(Into::into)
+        self.down_proj.forward(&hidden)
+    }
+
+    /// Returns a reference to the gate projection.
+    #[must_use]
+    pub fn gate_proj(&self) -> &Projection {
+        &self.gate_proj
+    }
+
+    /// Returns a reference to the up projection.
+    #[must_use]
+    pub fn up_proj(&self) -> &Projection {
+        &self.up_proj
+    }
+
+    /// Returns a reference to the down projection.
+    #[must_use]
+    pub fn down_proj(&self) -> &Projection {
+        &self.down_proj
+    }
+
+    /// Returns a mutable reference to the gate projection.
+    pub fn gate_proj_mut(&mut self) -> &mut Projection {
+        &mut self.gate_proj
+    }
+
+    /// Returns a mutable reference to the up projection.
+    pub fn up_proj_mut(&mut self) -> &mut Projection {
+        &mut self.up_proj
+    }
+
+    /// Returns a mutable reference to the down projection.
+    pub fn down_proj_mut(&mut self) -> &mut Projection {
+        &mut self.down_proj
     }
 }
 
