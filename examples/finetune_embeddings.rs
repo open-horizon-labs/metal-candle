@@ -101,7 +101,40 @@ fn main() -> Result<()> {
         );
     }
 
-    // 5. Verify: compute similarity before/after
+    // 5. Save LoRA weights
+    let lora_path = std::path::Path::new("e5_lora_finetune.safetensors");
+    {
+        let tensors: std::collections::HashMap<String, candle_core::Tensor> = trainable_vars
+            .iter()
+            .enumerate()
+            .map(|(i, var)| (format!("lora.{i}"), var.as_tensor().clone()))
+            .collect();
+        candle_core::safetensors::save(&tensors, lora_path)?;
+        println!("\nLoRA checkpoint saved to {}", lora_path.display());
+    }
+
+    // 6. Verify: load into a fresh model and check similarity
+    println!("\nLoading checkpoint into fresh model...");
+    let mut fresh_model =
+        EmbeddingModel::from_pretrained(EmbeddingModelType::E5SmallV2, device.clone())?;
+    fresh_model.apply_lora(&lora_config)?;
+
+    // Load saved weights
+    let saved_tensors: std::collections::HashMap<String, candle_core::Tensor> =
+        candle_core::safetensors::load(lora_path, &device)?;
+    let fresh_vars: Vec<candle_core::Var> = fresh_model.lora_vars().into_iter().cloned().collect();
+    for (i, var) in fresh_vars.iter().enumerate() {
+        if let Some(t) = saved_tensors.get(&format!("lora.{i}")) {
+            var.set(t)?;
+        }
+    }
+
+    let q_emb = fresh_model.encode(&["How to sort in Rust?"])?;
+    let d_emb = fresh_model.encode(&["Use vec.sort() for sorting"])?;
+    let sim_loaded = q_emb.matmul(&d_emb.t()?)?.to_vec2::<f32>()?;
+    println!("Loaded model similarity: {:.4}", sim_loaded[0][0]);
+
+    // 7. Compare: trained vs base model
     println!("\nSimilarity check (query vs matching doc):");
     let q_emb = model.encode(&["How to sort in Rust?"])?;
     let d_emb = model.encode(&["Use vec.sort() for sorting"])?;
