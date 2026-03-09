@@ -31,7 +31,7 @@ candle-nn = { version = "0.9", default-features = false }
 candle-transformers = { version = "0.9", default-features = false }
 
 # Model formats
-safetensors = "0.4"
+safetensors = "0.7"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
 
 # HuggingFace Hub integration (for model downloads)

@@ -93,7 +93,7 @@ pub fn save_checkpoint(
     });
 
     // Save using safetensors crate
-    safetensors::serialize_to_file(&tensors, &metadata_map, path)
+    safetensors::serialize_to_file(&tensors, metadata_map, path)
         .map_err(|e| crate::error::Error::Io(std::io::Error::other(e)))?;
 
     Ok(())
