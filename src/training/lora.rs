@@ -256,20 +256,7 @@ impl LoRALayer {
         })
     }
 
-    /// Creates a `LoRA` layer from existing A and B tensors.
-    ///
-    /// This is used when copying LoRA weights from an adapter into a `Projection`.
-    /// The tensors are cloned into new `Var` instances for independent gradient tracking.
-    ///
-    /// # Arguments
-    ///
-    /// * `lora_a` - The A matrix tensor, shape `(in_features, rank)`
-    /// * `lora_b` - The B matrix tensor, shape `(rank, out_features)`
-    /// * `config` - LoRA configuration
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if tensor operations fail.
+    /// Creates a `LoRA` layer from existing A and B tensors (copies — no gradient sharing).
     pub fn from_tensors(lora_a: &Tensor, lora_b: &Tensor, config: &LoRAConfig) -> Result<Self> {
         let a_dims = lora_a.dims();
         let b_dims = lora_b.dims();
@@ -287,6 +274,24 @@ impl LoRALayer {
             out_features,
             training: true,
         })
+    }
+
+    /// Creates a `LoRA` layer sharing the same `Var` instances (gradient-connected).
+    ///
+    /// Use this when the Projection's forward pass must produce gradients that
+    /// flow back to the adapter's trainable parameters.
+    #[must_use]
+    pub fn from_vars(lora_a: &Var, lora_b: &Var, config: &LoRAConfig) -> Self {
+        let in_features = lora_a.dims()[0];
+        let out_features = lora_b.dims()[1];
+        Self {
+            lora_a: lora_a.clone(),
+            lora_b: lora_b.clone(),
+            config: *config,
+            in_features,
+            out_features,
+            training: true,
+        }
     }
 
     /// Performs forward pass through the `LoRA` layer.

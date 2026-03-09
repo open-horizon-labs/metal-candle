@@ -93,10 +93,26 @@ impl Trainer {
         training_config: TrainingConfig,
         device: &Device,
     ) -> Result<Self> {
-        let lora_adapter = LoRAAdapter::new(
+        Self::new_with_gqa(hidden_size, intermediate_size, num_layers, None, None, lora_config, training_config, device)
+    }
+
+    /// Creates a new trainer with explicit GQA dimensions for grouped-query attention models.
+    pub fn new_with_gqa(
+        hidden_size: usize,
+        intermediate_size: usize,
+        num_layers: usize,
+        num_kv_heads: Option<usize>,
+        head_dim: Option<usize>,
+        lora_config: &LoRAAdapterConfig,
+        training_config: TrainingConfig,
+        device: &Device,
+    ) -> Result<Self> {
+        let lora_adapter = LoRAAdapter::new_with_gqa(
             hidden_size,
             intermediate_size,
             num_layers,
+            num_kv_heads,
+            head_dim,
             lora_config,
             device,
         )?;

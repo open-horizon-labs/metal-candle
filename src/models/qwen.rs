@@ -178,8 +178,17 @@ impl Qwen {
             &vb.pp("model.norm"),
         )?;
 
-        let lm_head =
-            candle_nn::linear_no_bias(config.hidden_size, config.vocab_size, vb.pp("lm_head"))?;
+        // Try loading lm_head; fall back to tied embeddings (shared weight with embed_tokens)
+        let lm_head = candle_nn::linear_no_bias(
+            config.hidden_size,
+            config.vocab_size,
+            vb.pp("lm_head"),
+        )
+        .or_else(|_| {
+            // Tied embeddings: reuse embed_tokens weight as lm_head
+            let weight = embed_tokens.embeddings().clone();
+            Ok::<candle_nn::Linear, crate::error::Error>(candle_nn::Linear::new(weight, None))
+        })?;
 
         Ok(Self {
             embed_tokens,
@@ -227,6 +236,29 @@ impl Qwen {
     #[must_use]
     pub fn num_layers(&self) -> usize {
         self.layers.len()
+    }
+
+    /// Collects all LoRA trainable `Var` references from the model's projections.
+    ///
+    /// These are the actual Vars used in the forward pass, so gradients from
+    /// `loss.backward()` will be keyed to them.
+    pub fn lora_vars(&self) -> Vec<&candle_core::Var> {
+        let mut vars = Vec::new();
+        for layer in &self.layers {
+            let attn = &layer.self_attn;
+            for proj in [attn.q_proj(), attn.k_proj(), attn.v_proj(), attn.o_proj()] {
+                if let Some(lora) = proj.lora() {
+                    vars.extend(lora.trainable_variables());
+                }
+            }
+            let mlp = &layer.mlp;
+            for proj in [mlp.gate_proj(), mlp.up_proj(), mlp.down_proj()] {
+                if let Some(lora) = proj.lora() {
+                    vars.extend(lora.trainable_variables());
+                }
+            }
+        }
+        vars
     }
 
     /// Returns the number of parameters in the model (base weights only, excludes LoRA).
@@ -326,12 +358,9 @@ fn set_projection_lora(
     target: &TargetModule,
 ) {
     if let Some(lora_layer) = adapter.get_layer(layer_idx, target) {
-        let config = lora_layer.config();
-        if let Ok(new_lora) =
-            LoRALayer::from_tensors(lora_layer.lora_a_tensor(), lora_layer.lora_b_tensor(), config)
-        {
-            proj.set_lora(Some(new_lora));
-        }
+        // Share the same Var instances so gradients flow through to the adapter
+        let shared = LoRALayer::from_vars(lora_layer.lora_a(), lora_layer.lora_b(), lora_layer.config());
+        proj.set_lora(Some(shared));
     } else {
         proj.set_lora(None);
     }
