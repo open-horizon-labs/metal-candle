@@ -378,3 +378,42 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+/// Multiple Negatives Ranking Loss for contrastive embedding training.
+///
+/// Given query embeddings and positive document embeddings (both L2-normalized),
+/// treats all other documents in the batch as negatives. Computes:
+///
+/// `loss = cross_entropy(similarity_matrix * scale, labels)`
+///
+/// where `labels[i] = i` (each query's positive is on the diagonal).
+///
+/// # Arguments
+///
+/// * `queries` - Query embeddings, shape `(batch, dim)`, L2-normalized
+/// * `positives` - Positive document embeddings, shape `(batch, dim)`, L2-normalized
+/// * `scale` - Temperature scaling (typically 20.0)
+///
+/// # Errors
+///
+/// Returns an error if shapes don't match or tensor operations fail.
+pub fn contrastive_loss(queries: &Tensor, positives: &Tensor, scale: f64) -> Result<Tensor> {
+    let (batch, _dim) = queries.dims2()?;
+
+    // Cosine similarity matrix: (batch, batch)
+    // Since inputs are normalized, dot product = cosine similarity
+    let similarity = queries.matmul(&positives.t()?)?;
+
+    // Scale
+    let similarity = (similarity * scale)?;
+
+    // Labels: each query matches its own positive (diagonal)
+    let labels = Tensor::arange(0u32, batch as u32, queries.device())?;
+
+    // Cross-entropy over the similarity matrix
+    let log_probs = candle_nn::ops::log_softmax(&similarity, 1)?;
+    let nll = log_probs.gather(&labels.unsqueeze(1)?, 1)?.squeeze(1)?;
+    let loss = nll.neg()?.mean_all()?;
+
+    Ok(loss)
+}
