@@ -153,3 +153,7 @@ harness = false
 name = "streaming"
 harness = false
 
+[[bench]]
+name = "embeddings_batch"
+harness = false
+
