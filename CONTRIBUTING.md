@@ -21,7 +21,7 @@ This project follows the [Rust Code of Conduct](https://www.rust-lang.org/polici
 
 ### Prerequisites
 
-- **Rust** 1.75+ (stable toolchain)
+- **Rust** 1.88+ (stable toolchain)
 - **Apple Silicon Mac** (M1/M2/M3/M4) for full testing
 - **Git** for version control
 - **GitHub CLI** (`gh`) recommended for PR management
@@ -690,4 +690,3 @@ By contributing, you agree that your contributions will be licensed under the Ap
 ---
 
 **Thank you for contributing to metal-candle!** 🎉
-

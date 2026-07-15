@@ -5,7 +5,7 @@
 [![CI](https://github.com/GarthDB/metal-candle/workflows/CI/badge.svg)](https://github.com/GarthDB/metal-candle/actions)
 [![codecov](https://codecov.io/gh/GarthDB/metal-candle/branch/main/graph/badge.svg)](https://codecov.io/gh/GarthDB/metal-candle)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
 
 > Production-quality Rust ML library for Apple Silicon - LoRA training, text generation, and semantic embeddings
 
@@ -41,7 +41,7 @@ See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance analysis and methodo
 metal-candle = "1.2"  # or latest from crates.io
 ```
 
-**Requirements**: Rust 1.75+, Apple Silicon (M1/M2/M3/M4), macOS 12.0+
+**Requirements**: Rust 1.88+, Apple Silicon (M1/M2/M3/M4), macOS 12.0+
 
 ## Quick Start
 

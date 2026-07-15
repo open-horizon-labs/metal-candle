@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-(Nothing yet)
+### Changed
+
+- Raise the declared Rust floor to 1.88, matching the repository's current
+  compatible dependency graph.
+
+### Security
+
+- Upgrade `hf-hub` from 0.4 to 0.5, replacing the unmaintained
+  `number_prefix` progress dependency with `unit-prefix` through indicatif 0.18.
 
 ## [1.3.0] - 2024-12-18
 
@@ -755,8 +763,6 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 
 **Status**: ✅ Production Ready  
 **Target Platform**: Apple Silicon (M1/M2/M3/M4)  
-**Minimum Requirements**: Rust 1.75+, macOS 12.0+
+**Minimum Requirements**: Rust 1.88+, macOS 12.0+
 
 [1.0.0]: https://github.com/GarthDB/metal-candle/releases/tag/v1.0.0
-
-
